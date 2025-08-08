@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🌐 GitHub Music Streamer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🌐 GitHub Music Streamer</h1>
+        </header>
+
+        <!-- Current Track Display -->
+        <div class="track-display">
+            <div class="track-info">
+                <div class="artwork">
+                    <div class="default-artwork">🎵</div>
+                </div>
+                <div class="track-details">
+                    <div class="track-title" id="trackTitle">No track selected</div>
+                    
+                    <!-- Metadata Display -->
+                    <div class="metadata-grid">
+                        <div class="metadata-item">
+                            <span class="label">Artist:</span>
+                            <span class="value" id="metaArtist">N/A</span>
+                        </div>
+                        <div class="metadata-item">
+                            <span class="label">Title:</span>
+                            <span class="value" id="metaTitle">N/A</span>
+                        </div>
+                        <div class="metadata-item">
+                            <span class="label">Album:</span>
+                            <span class="value" id="metaAlbum">N/A</span>
+                        </div>
+                        <div class="metadata-item">
+                            <span class="label">Year:</span>
+                            <span class="value" id="metaYear">N/A</span>
+                        </div>
+                        <div class="metadata-item">
+                            <span class="label">Genre:</span>
+                            <span class="value" id="metaGenre">N/A</span>
+                        </div>
+                        <div class="metadata-item">
+                            <span class="label">Duration:</span>
+                            <span class="value" id="metaDuration">N/A</span>
+                        </div>
+                        <div class="metadata-item">
+                            <span class="label">Bitrate:</span>
+                            <span class="value" id="metaBitrate">N/A</span>
+                        </div>
+                        <div class="metadata-item">
+                            <span class="label">File Size:</span>
+                            <span class="value" id="metaFilesize">N/A</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Progress Bar -->
+        <div class="progress-container">
+            <div class="progress-bar" id="progressBar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="time-display">
+                <span id="currentTime">00:00</span>
+                <span id="totalTime">00:00</span>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls">
+            <button class="control-btn" id="prevBtn" title="Previous">⏮</button>
+            <button class="control-btn play-btn" id="playBtn" title="Play/Pause">▶</button>
+            <button class="control-btn" id="stopBtn" title="Stop">⏹</button>
+            <button class="control-btn" id="nextBtn" title="Next">⏭</button>
+            <button class="control-btn shuffle-btn" id="shuffleBtn" title="Shuffle">🔀</button>
+        </div>
+
+        <!-- Volume Control -->
+        <div class="volume-control">
+            <span class="volume-icon">🔊</span>
+            <input type="range" class="volume-slider" id="volumeSlider" min="0" max="100" value="70">
+            <span class="volume-label" id="volumeLabel">70%</span>
+        </div>
+
+        <!-- File Operations -->
+        <div class="file-operations">
+            <button class="action-btn" id="refreshBtn">🔄 Refresh Songs</button>
+            <button class="action-btn" id="clearBtn">🗑 Clear Playlist</button>
+        </div>
+
+        <!-- Loading Screen -->
+        <div class="loading-screen" id="loadingScreen" style="display: none;">
+            <div class="loading-content">
+                <div class="loading-text" id="loadingText">🔍 Scanning music library...</div>
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="scanProgressFill"></div>
+                    </div>
+                    <div class="progress-percent" id="scanProgressPercent">0%</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Playlist -->
+        <div class="playlist-container" id="playlistContainer">
+            <h3>Playlist:</h3>
+            <div class="playlist" id="playlist">
+                <!-- Playlist items will be added here -->
+            </div>
+        </div>
+
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <span id="statusText">Ready to stream from GitHub</span>
+        </div>
+
+        <!-- Audio Element -->
+        <audio id="audioPlayer" crossorigin="anonymous"></audio>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

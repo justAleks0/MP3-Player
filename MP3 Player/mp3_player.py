@@ -10,11 +10,14 @@ import mutagen
 from mutagen.mp3 import MP3
 from PIL import Image, ImageTk
 import io
+import requests
+import urllib.request
+import tempfile
 
 class MP3Player:
     def __init__(self, root):
         self.root = root
-        self.root.title("Modern MP3 Player")
+        self.root.title("🌐 GitHub Music Streamer")
         self.root.geometry("800x600")
         self.root.configure(bg='#2b2b2b')
         
@@ -24,9 +27,11 @@ class MP3Player:
         # Player state
         self.current_track = None
         self.playlist = []
+        self.original_playlist = []  # Store original order for shuffle toggle
         self.current_index = 0
         self.is_playing = False
         self.is_paused = False
+        self.is_shuffled = False
         
         # Load settings
         self.settings_file = "player_settings.json"
@@ -34,6 +39,18 @@ class MP3Player:
         
         self.setup_ui()
         self.setup_bindings()
+        
+        # Auto-fetch songs on startup
+        self.root.after(1000, self.auto_fetch_songs)
+        
+    def auto_fetch_songs(self):
+        """Automatically fetch songs from GitHub on startup"""
+        self.status_var.set("🌐 Auto-loading songs from GitHub...")
+        self.root.update()
+        
+        # Start fetching in a separate thread to avoid blocking UI
+        fetch_thread = threading.Thread(target=self.stream_from_github, daemon=True)
+        fetch_thread.start()
         
     def create_default_artwork(self):
         """Create a default music note icon"""
@@ -55,56 +72,7 @@ class MP3Player:
         
         return ImageTk.PhotoImage(img)
     
-    def extract_artwork(self, file_path):
-        """Extract artwork from MP3 file"""
-        try:
-            audio = MP3(file_path)
-            if audio.tags:
-                # Look for artwork in ID3 tags
-                for key in ['APIC:', 'APIC:0', 'APIC:1', 'APIC:2', 'APIC:3']:
-                    if key in audio.tags:
-                        artwork_data = audio.tags[key].data
-                        img = Image.open(io.BytesIO(artwork_data))
-                        return img
-                
-                # Try other common artwork keys
-                for key in audio.tags.keys():
-                    if 'APIC' in str(key):
-                        artwork_data = audio.tags[key].data
-                        img = Image.open(io.BytesIO(artwork_data))
-                        return img
-                        
-        except Exception as e:
-            self.status_var.set(f"Artwork extraction failed: {str(e)}")
-        
-        return None
-    
-    def display_artwork(self, file_path):
-        """Display artwork for the given file"""
-        try:
-            artwork = self.extract_artwork(file_path)
-            
-            if artwork:
-                # Resize artwork to fit display
-                size = 120
-                artwork = artwork.resize((size, size), Image.Resampling.LANCZOS)
-                photo = ImageTk.PhotoImage(artwork)
-                
-                # Update the artwork label
-                self.artwork_label.configure(image=photo)
-                self.artwork_label.image = photo  # Keep a reference
-                
-                self.status_var.set("Artwork loaded successfully")
-            else:
-                # Use default artwork
-                self.artwork_label.configure(image=self.default_artwork)
-                self.artwork_label.image = self.default_artwork
-                
-        except Exception as e:
-            # Use default artwork on error
-            self.artwork_label.configure(image=self.default_artwork)
-            self.artwork_label.image = self.default_artwork
-            self.status_var.set(f"Artwork display failed: {str(e)}")
+
         
     def setup_ui(self):
         # Main frame
@@ -112,7 +80,7 @@ class MP3Player:
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
         # Title
-        title_label = tk.Label(main_frame, text="🎵 Modern MP3 Player", 
+        title_label = tk.Label(main_frame, text="🌐 GitHub Music Streamer", 
                               font=('Arial', 24, 'bold'), 
                               fg='#ffffff', bg='#2b2b2b')
         title_label.pack(pady=(0, 20))
@@ -241,6 +209,14 @@ class MP3Player:
                                     relief=tk.FLAT, padx=10, pady=5)
         self.next_button.pack(side=tk.LEFT, padx=5)
         
+        # Shuffle button
+        self.shuffle_button = tk.Button(self.control_frame, text="🔀", 
+                                      font=('Arial', 16), 
+                                      command=self.toggle_shuffle,
+                                      bg='#4a4a4a', fg='#ffffff',
+                                      relief=tk.FLAT, padx=10, pady=5)
+        self.shuffle_button.pack(side=tk.LEFT, padx=5)
+        
         # Volume control
         self.volume_frame = tk.Frame(main_frame, bg='#2b2b2b')
         self.volume_frame.pack(pady=10)
@@ -259,23 +235,17 @@ class MP3Player:
                                    fg='#cccccc', bg='#2b2b2b')
         self.volume_label.pack(side=tk.LEFT, padx=5)
         
-        # File operations
-        self.file_frame = tk.Frame(main_frame, bg='#2b2b2b')
-        self.file_frame.pack(pady=20)
+        # Streaming operations
+        self.stream_frame = tk.Frame(main_frame, bg='#2b2b2b')
+        self.stream_frame.pack(pady=20)
         
-        self.open_button = tk.Button(self.file_frame, text="📁 Open File", 
-                                    command=self.open_file,
-                                    bg='#4a4a4a', fg='#ffffff',
-                                    relief=tk.FLAT, padx=15, pady=5)
-        self.open_button.pack(side=tk.LEFT, padx=5)
+        self.refresh_button = tk.Button(self.stream_frame, text="🔄 Refresh Songs", 
+                                      command=self.stream_from_github,
+                                      bg='#4a4a4a', fg='#ffffff',
+                                      relief=tk.FLAT, padx=15, pady=5)
+        self.refresh_button.pack(side=tk.LEFT, padx=5)
         
-        self.open_folder_button = tk.Button(self.file_frame, text="📂 Open Folder", 
-                                          command=self.open_folder,
-                                          bg='#4a4a4a', fg='#ffffff',
-                                          relief=tk.FLAT, padx=15, pady=5)
-        self.open_folder_button.pack(side=tk.LEFT, padx=5)
-        
-        self.clear_button = tk.Button(self.file_frame, text="🗑 Clear Playlist", 
+        self.clear_button = tk.Button(self.stream_frame, text="🗑 Clear Playlist", 
                                     command=self.clear_playlist,
                                     bg='#4a4a4a', fg='#ffffff',
                                     relief=tk.FLAT, padx=15, pady=5)
@@ -309,6 +279,31 @@ class MP3Player:
         # Bind double-click to play selected track
         self.playlist_listbox.bind('<Double-Button-1>', self.play_selected_track)
         
+        # Loading progress frame
+        self.loading_frame = tk.Frame(main_frame, bg='#2b2b2b')
+        self.loading_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        self.loading_label = tk.Label(self.loading_frame, text="🔍 Scanning music library...", 
+                                    font=('Arial', 12), 
+                                    fg='#ffffff', bg='#2b2b2b')
+        self.loading_label.pack(pady=(0, 5))
+        
+        # Progress bar for scanning
+        self.scan_progress_var = tk.DoubleVar()
+        self.scan_progress_bar = ttk.Progressbar(self.loading_frame, 
+                                               variable=self.scan_progress_var,
+                                               maximum=100, length=700)
+        self.scan_progress_bar.pack(pady=(0, 5))
+        
+        # Progress percentage label
+        self.progress_percent_label = tk.Label(self.loading_frame, text="0%", 
+                                             font=('Arial', 10, 'bold'), 
+                                             fg='#00ff00', bg='#2b2b2b')
+        self.progress_percent_label.pack()
+        
+        # Hide loading frame initially
+        self.loading_frame.pack_forget()
+        
         # Status bar
         self.status_var = tk.StringVar(value="Ready")
         self.status_bar = tk.Label(self.root, textvariable=self.status_var,
@@ -326,6 +321,8 @@ class MP3Player:
         self.root.bind('<Right>', lambda e: self.next_track())
         self.root.bind('<Up>', lambda e: self.volume_up())
         self.root.bind('<Down>', lambda e: self.volume_down())
+        self.root.bind('<s>', lambda e: self.toggle_shuffle())
+        self.root.bind('<S>', lambda e: self.toggle_shuffle())
         
     def load_settings(self):
         try:
@@ -346,25 +343,233 @@ class MP3Player:
         except:
             pass
             
-    def open_file(self):
-        file_path = filedialog.askopenfilename(
-            title="Select MP3 File",
-            filetypes=[("MP3 files", "*.mp3"), ("All files", "*.*")]
-        )
-        if file_path:
-            self.add_to_playlist(file_path)
+
             
-    def open_folder(self):
-        folder_path = filedialog.askdirectory(title="Select Folder with MP3 Files")
-        if folder_path:
-            self.add_folder_to_playlist(folder_path)
+    def stream_from_github(self):
+        """Stream songs from GitHub repository with comprehensive scanning"""
+        try:
+            # Clear existing playlist
+            self.clear_playlist()
             
-    def get_metadata(self, file_path):
-        """Extract metadata from MP3 file"""
+            # Show loading interface
+            self.show_loading_screen()
+            
+            # GitHub repository details
+            repo_url = "https://github.com/justAleks0/MP3-Player"
+            songs_path = "MP3 Player/Songs"
+            
+            # Get repository contents
+            api_url = f"https://api.github.com/repos/justAleks0/MP3-Player/contents/{songs_path}"
+            
+            self.update_scan_progress(5, "🌐 Connecting to GitHub repository...")
+            
+            response = requests.get(api_url)
+            if response.status_code == 200:
+                contents = response.json()
+                
+                # First pass: Discover all files across all folders
+                self.update_scan_progress(10, "📁 Discovering all music files...")
+                all_files = self.discover_all_files(contents, songs_path)
+                
+                # Second pass: Extract metadata from all files
+                self.update_scan_progress(20, "🔍 Scanning metadata from all files...")
+                all_songs = self.extract_all_metadata(all_files)
+                
+                # Third pass: Group by artist and organize
+                self.update_scan_progress(80, "🎵 Organizing songs by artist...")
+                self.group_and_add_songs_with_progress(all_songs)
+                
+                self.update_scan_progress(100, "✅ Music library scan complete!")
+                
+                # Hide loading screen after a brief delay
+                self.root.after(1500, self.hide_loading_screen)
+                
+            else:
+                self.hide_loading_screen()
+                messagebox.showerror("Error", f"Failed to access GitHub repository: {response.status_code}")
+                
+        except Exception as e:
+            self.hide_loading_screen()
+            messagebox.showerror("Error", f"Failed to stream from GitHub: {str(e)}")
+            self.status_var.set("GitHub streaming failed")
+    
+    def show_loading_screen(self):
+        """Show the loading progress interface"""
+        self.loading_frame.pack(fill=tk.X, pady=(10, 0), before=self.playlist_frame)
+        self.playlist_frame.pack_forget()
+        
+    def hide_loading_screen(self):
+        """Hide the loading progress interface"""
+        self.loading_frame.pack_forget()
+        self.playlist_frame.pack(fill=tk.BOTH, expand=True, pady=(20, 0))
+        
+    def update_scan_progress(self, percentage, message):
+        """Update the progress bar and message"""
+        self.scan_progress_var.set(percentage)
+        self.progress_percent_label.config(text=f"{int(percentage)}%")
+        self.loading_label.config(text=message)
+        self.status_var.set(message)
+        self.root.update()
+        
+    def discover_all_files(self, contents, base_path):
+        """Recursively discover all MP3 files across all folders"""
+        all_files = []
+        
+        def scan_directory(items, current_path):
+            for item in items:
+                if item['type'] == 'file' and item['name'].lower().endswith('.mp3'):
+                    all_files.append({
+                        'url': item['download_url'],
+                        'name': item['name'],
+                        'path': current_path,
+                        'folder': os.path.basename(current_path)
+                    })
+                elif item['type'] == 'dir':
+                    try:
+                        subdir_url = f"https://api.github.com/repos/justAleks0/MP3-Player/contents/{current_path}/{item['name']}"
+                        subdir_response = requests.get(subdir_url)
+                        if subdir_response.status_code == 200:
+                            subdir_contents = subdir_response.json()
+                            scan_directory(subdir_contents, f"{current_path}/{item['name']}")
+                    except Exception as e:
+                        pass
+        
+        scan_directory(contents, base_path)
+        return all_files
+        
+    def extract_all_metadata(self, all_files):
+        """Extract metadata from all discovered files with progress tracking"""
+        all_songs = []
+        total_files = len(all_files)
+        
+        for i, file_info in enumerate(all_files):
+            # Calculate progress (20% to 80% of total progress)
+            progress = 20 + (i / total_files) * 60
+            self.update_scan_progress(progress, f"🔍 Scanning: {file_info['name']} ({i+1}/{total_files})")
+            
+            metadata = self.get_streaming_metadata(file_info['url'], file_info['name'])
+            
+            # Add folder information to metadata for better organization
+            metadata['folder'] = file_info['folder']
+            metadata['file_path'] = file_info['path']
+            
+            all_songs.append({
+                'url': file_info['url'],
+                'name': file_info['name'],
+                'metadata': metadata,
+                'folder': file_info['folder']
+            })
+            
+        return all_songs
+        
+    def group_and_add_songs_with_progress(self, songs):
+        """Group songs by artist with progress tracking and comprehensive organization"""
+        # Group songs by artist (across all folders)
+        artist_groups = {}
+        
+        for song in songs:
+            artist = song['metadata']['artist']
+            if artist not in artist_groups:
+                artist_groups[artist] = []
+            artist_groups[artist].append(song)
+        
+        # Sort artists alphabetically
+        sorted_artists = sorted(artist_groups.keys())
+        
+        # Update progress
+        self.update_scan_progress(85, f"🎵 Organizing {len(sorted_artists)} artists...")
+        
+        # Add songs grouped by artist with separators
+        total_artists = len(sorted_artists)
+        for i, artist in enumerate(sorted_artists):
+            # Update progress for each artist
+            artist_progress = 85 + (i / total_artists) * 10
+            self.update_scan_progress(artist_progress, f"🎵 Adding {artist}...")
+            
+            # Add artist separator
+            separator_text = f"====={artist}====="
+            self.playlist.append({'type': 'separator', 'text': separator_text})
+            self.playlist_listbox.insert(tk.END, separator_text)
+            
+            # Sort songs within artist by title
+            artist_songs = sorted(artist_groups[artist], key=lambda x: x['metadata']['title'])
+            
+            # Add songs for this artist
+            for song in artist_songs:
+                streaming_entry = {
+                    'type': 'streaming',
+                    'url': song['url'],
+                    'name': song['name'],
+                    'metadata': song['metadata'],
+                    'folder': song['folder'],
+                    'display_name': f"🌐 {song['metadata']['title']}"
+                }
+                
+                # Add folder info if multiple folders exist for same artist
+                if len([s for s in artist_groups[artist] if s['folder'] != song['folder']]) > 0:
+                    streaming_entry['display_name'] = f"🌐 {song['metadata']['title']} [{song['folder']}]"
+                
+                self.playlist.append(streaming_entry)
+                self.playlist_listbox.insert(tk.END, streaming_entry['display_name'])
+        
+        # Save original playlist order for shuffle functionality
+        self.original_playlist = self.playlist.copy()
+        
+        # Final status update
+        total_songs = sum(len(songs) for songs in artist_groups.values())
+        self.status_var.set(f"✅ Loaded {total_songs} songs from {len(sorted_artists)} artists")
+    
+    def add_github_songs(self, contents, base_path):
+        """Recursively add songs from GitHub repository"""
+        songs_found = 0
+        all_songs = []  # Collect all songs first
+        
+        for item in contents:
+            if item['type'] == 'file' and item['name'].lower().endswith('.mp3'):
+                # Found an MP3 file
+                song_url = item['download_url']
+                song_name = item['name']
+                
+                # Get metadata for the song
+                metadata = self.get_streaming_metadata(song_url, song_name)
+                all_songs.append({
+                    'url': song_url,
+                    'name': song_name,
+                    'metadata': metadata
+                })
+                songs_found += 1
+                
+            elif item['type'] == 'dir':
+                # Recursively explore subdirectories (artists)
+                try:
+                    subdir_url = f"https://api.github.com/repos/justAleks0/MP3-Player/contents/{base_path}/{item['name']}"
+                    subdir_response = requests.get(subdir_url)
+                    
+                    if subdir_response.status_code == 200:
+                        subdir_contents = subdir_response.json()
+                        subdir_songs = self.add_github_songs(subdir_contents, f"{base_path}/{item['name']}")
+                        songs_found += subdir_songs
+                        
+                except Exception as e:
+                    self.status_var.set(f"Error accessing subdirectory {item['name']}: {str(e)}")
+        
+        # Group songs by artist and add to playlist
+        if all_songs:
+            self.group_and_add_songs(all_songs)
+        
+        if songs_found > 0:
+            self.status_var.set(f"Added {songs_found} streaming songs from GitHub")
+        else:
+            messagebox.showwarning("No songs found", "No MP3 files found in the GitHub repository.")
+            
+        return songs_found
+    
+    def get_streaming_metadata(self, url, name):
+        """Get metadata for streaming songs"""
         metadata = {
-            'artist': 'Unknown',
-            'title': 'Unknown',
-            'album': 'Unknown',
+            'artist': 'Unknown Artist',
+            'title': name.replace('.mp3', ''),
+            'album': 'Unknown Album',
             'year': 'Unknown',
             'genre': 'Unknown',
             'duration': 'Unknown',
@@ -373,114 +578,186 @@ class MP3Player:
         }
         
         try:
-            # Get file size
-            file_size = os.path.getsize(file_path)
-            if file_size < 1024:
-                metadata['filesize'] = f"{file_size} B"
-            elif file_size < 1024 * 1024:
-                metadata['filesize'] = f"{file_size / 1024:.1f} KB"
-            else:
-                metadata['filesize'] = f"{file_size / (1024 * 1024):.1f} MB"
+            # Download a small portion to get metadata
+            response = requests.get(url, stream=True)
+            response.raise_for_status()
             
-            # Get MP3 metadata
-            audio = MP3(file_path)
-            
-            # Duration
-            if audio.info.length:
-                minutes = int(audio.info.length // 60)
-                seconds = int(audio.info.length % 60)
-                metadata['duration'] = f"{minutes:02d}:{seconds:02d}"
-            
-            # Bitrate
-            if audio.info.bitrate:
-                if audio.info.bitrate < 1000:
-                    metadata['bitrate'] = f"{audio.info.bitrate} bps"
-                else:
-                    metadata['bitrate'] = f"{audio.info.bitrate / 1000:.0f} kbps"
-            
-            # ID3 tags
-            if audio.tags:
-                # Artist
-                if 'TPE1' in audio.tags:
-                    metadata['artist'] = str(audio.tags['TPE1'])
-                elif 'artist' in audio.tags:
-                    metadata['artist'] = str(audio.tags['artist'])
+            # Create temporary file for metadata extraction
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_file:
+                # Download first 1MB for metadata
+                chunk_size = 8192
+                downloaded = 0
+                max_download = 1024 * 1024  # 1MB
                 
-                # Title
-                if 'TIT2' in audio.tags:
-                    metadata['title'] = str(audio.tags['TIT2'])
-                elif 'title' in audio.tags:
-                    metadata['title'] = str(audio.tags['title'])
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if downloaded >= max_download:
+                        break
+                    temp_file.write(chunk)
+                    downloaded += len(chunk)
                 
-                # Album
-                if 'TALB' in audio.tags:
-                    metadata['album'] = str(audio.tags['TALB'])
-                elif 'album' in audio.tags:
-                    metadata['album'] = str(audio.tags['album'])
+                temp_file.flush()
                 
-                # Year
-                if 'TDRC' in audio.tags:
-                    year_str = str(audio.tags['TDRC'])
-                    if year_str.isdigit():
-                        metadata['year'] = year_str
-                elif 'year' in audio.tags:
-                    metadata['year'] = str(audio.tags['year'])
+                # Extract metadata
+                try:
+                    audio = MP3(temp_file.name)
+                    
+                    # Duration
+                    if audio.info.length:
+                        minutes = int(audio.info.length // 60)
+                        seconds = int(audio.info.length % 60)
+                        metadata['duration'] = f"{minutes:02d}:{seconds:02d}"
+                    
+                    # Bitrate
+                    if audio.info.bitrate:
+                        if audio.info.bitrate < 1000:
+                            metadata['bitrate'] = f"{audio.info.bitrate} bps"
+                        else:
+                            metadata['bitrate'] = f"{audio.info.bitrate / 1000:.0f} kbps"
+                    
+                    # ID3 tags
+                    if audio.tags:
+                        # Artist
+                        if 'TPE1' in audio.tags:
+                            metadata['artist'] = str(audio.tags['TPE1'])
+                        elif 'artist' in audio.tags:
+                            metadata['artist'] = str(audio.tags['artist'])
+                        
+                        # Title
+                        if 'TIT2' in audio.tags:
+                            metadata['title'] = str(audio.tags['TIT2'])
+                        elif 'title' in audio.tags:
+                            metadata['title'] = str(audio.tags['title'])
+                        
+                        # Album
+                        if 'TALB' in audio.tags:
+                            metadata['album'] = str(audio.tags['TALB'])
+                        elif 'album' in audio.tags:
+                            metadata['album'] = str(audio.tags['album'])
+                        
+                        # Year
+                        if 'TDRC' in audio.tags:
+                            year_str = str(audio.tags['TDRC'])
+                            if year_str.isdigit():
+                                metadata['year'] = year_str
+                        elif 'year' in audio.tags:
+                            metadata['year'] = str(audio.tags['year'])
+                        
+                        # Genre
+                        if 'TCON' in audio.tags:
+                            metadata['genre'] = str(audio.tags['TCON'])
+                        elif 'genre' in audio.tags:
+                            metadata['genre'] = str(audio.tags['genre'])
                 
-                # Genre
-                if 'TCON' in audio.tags:
-                    metadata['genre'] = str(audio.tags['TCON'])
-                elif 'genre' in audio.tags:
-                    metadata['genre'] = str(audio.tags['genre'])
-            
-            # If no title found, use filename
-            if metadata['title'] == 'Unknown':
-                metadata['title'] = os.path.splitext(os.path.basename(file_path))[0]
+                except Exception as e:
+                    pass
+                
+                # Clean up temp file
+                os.unlink(temp_file.name)
                 
         except Exception as e:
-            # If metadata extraction fails, use filename as title
-            metadata['title'] = os.path.splitext(os.path.basename(file_path))[0]
-            self.status_var.set(f"Metadata extraction failed: {str(e)}")
+            pass
         
         return metadata
     
-    def display_metadata(self, file_path):
-        """Display metadata for the given file"""
-        metadata = self.get_metadata(file_path)
+    def group_and_add_songs(self, songs):
+        """Group songs by artist and add to playlist with separators"""
+        # Group songs by artist
+        artist_groups = {}
         
+        for song in songs:
+            artist = song['metadata']['artist']
+            if artist not in artist_groups:
+                artist_groups[artist] = []
+            artist_groups[artist].append(song)
+        
+        # Sort artists alphabetically
+        sorted_artists = sorted(artist_groups.keys())
+        
+        # Add songs grouped by artist with separators
+        for artist in sorted_artists:
+            # Add artist separator
+            separator_text = f"====={artist}====="
+            self.playlist.append({'type': 'separator', 'text': separator_text})
+            self.playlist_listbox.insert(tk.END, separator_text)
+            
+            # Add songs for this artist
+            for song in artist_groups[artist]:
+                streaming_entry = {
+                    'type': 'streaming',
+                    'url': song['url'],
+                    'name': song['name'],
+                    'metadata': song['metadata'],
+                    'display_name': f"🌐 {song['metadata']['title']}"
+                }
+                
+                self.playlist.append(streaming_entry)
+                self.playlist_listbox.insert(tk.END, streaming_entry['display_name'])
+    
+    def add_streaming_song(self, url, name):
+        """Add a streaming song to the playlist"""
+        # Create a special entry for streaming songs
+        streaming_entry = {
+            'type': 'streaming',
+            'url': url,
+            'name': name,
+            'display_name': f"🌐 {name}"
+        }
+        
+        # Add to playlist
+        self.playlist.append(streaming_entry)
+        self.playlist_listbox.insert(tk.END, streaming_entry['display_name'])
+        
+    def stream_directly_from_url(self, url, name):
+        """Stream directly from URL without any file creation"""
+        try:
+            # For true streaming, we need to use pygame's URL support
+            # However, pygame.mixer doesn't support direct URL streaming
+            # So we'll use a minimal temporary file that gets deleted immediately after use
+            
+            self.status_var.set(f"Streaming {name}...")
+            self.root.update()
+            
+            # Create a minimal temp file that will be deleted after playback
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+            temp_file.close()
+            
+            # Stream the file in chunks
+            response = requests.get(url, stream=True)
+            response.raise_for_status()
+            
+            with open(temp_file.name, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            # Return the temp file path (will be cleaned up later)
+            return temp_file.name
+            
+        except Exception as e:
+            self.status_var.set(f"Streaming failed: {str(e)}")
+            return None
+            
+    def display_streaming_metadata(self, metadata):
+        """Display metadata for streaming songs"""
         for key, label in self.metadata_labels.items():
             if key in metadata:
                 label.config(text=metadata[key])
             else:
                 label.config(text="N/A")
     
-    def add_to_playlist(self, file_path):
-        if file_path not in self.playlist:
-            self.playlist.append(file_path)
-            filename = os.path.basename(file_path)
-            self.playlist_listbox.insert(tk.END, filename)
-            self.status_var.set(f"Added: {filename}")
-            
-    def add_folder_to_playlist(self, folder_path):
-        mp3_files = []
-        for ext in ['*.mp3', '*.MP3']:
-            # Use rglob to search recursively through all subfolders
-            mp3_files.extend(Path(folder_path).rglob(ext))
-        
-        if mp3_files:
-            for file_path in sorted(mp3_files):
-                self.add_to_playlist(str(file_path))
-            self.status_var.set(f"Added {len(mp3_files)} files from folder and subfolders")
-        else:
-            messagebox.showwarning("No MP3 files found", 
-                                 "No MP3 files were found in the selected folder or its subfolders.")
+
             
     def clear_playlist(self):
         self.stop()
         self.playlist.clear()
+        self.original_playlist.clear()
         self.playlist_listbox.delete(0, tk.END)
         self.current_track = None
         self.current_index = 0
         self.track_label.config(text="No track selected")
+        
+        # Reset shuffle state
+        self.is_shuffled = False
+        self.shuffle_button.config(bg='#4a4a4a', text='🔀')
         
         # Clear metadata display
         for label in self.metadata_labels.values():
@@ -500,29 +777,45 @@ class MP3Player:
             
     def play_current_track(self):
         if 0 <= self.current_index < len(self.playlist):
-            self.current_track = self.playlist[self.current_index]
+            current_item = self.playlist[self.current_index]
             self.playlist_listbox.selection_clear(0, tk.END)
             self.playlist_listbox.selection_set(self.current_index)
             self.playlist_listbox.see(self.current_index)
             
             try:
+                # Handle separators - skip to next track
+                if isinstance(current_item, dict) and current_item.get('type') == 'separator':
+                    self.next_track()
+                    return
+                
+                # Handle streaming songs only (no local files)
+                if isinstance(current_item, dict) and current_item.get('type') == 'streaming':
+                    # Stream directly from URL without caching
+                    streamed_file = self.stream_directly_from_url(current_item['url'], current_item['name'])
+                    if streamed_file:
+                        self.current_track = streamed_file
+                        display_name = current_item['metadata']['title']
+                        artist = current_item['metadata']['artist']
+                        self.track_label.config(text=f"Now playing: 🌐 {artist} - {display_name}")
+                        self.status_var.set(f"Playing: {display_name}")
+                    else:
+                        self.status_var.set("Failed to stream song")
+                        return
+                else:
+                    # No local files supported - skip
+                    self.status_var.set("Only streaming songs supported")
+                    return
+                
                 pygame.mixer.music.load(self.current_track)
                 pygame.mixer.music.play()
                 self.is_playing = True
                 self.is_paused = False
                 self.play_button.config(text="⏸")
                 
-                # Display metadata and artwork
-                self.display_metadata(self.current_track)
-                self.display_artwork(self.current_track)
-                
-                # Get metadata for display name
-                metadata = self.get_metadata(self.current_track)
-                display_name = metadata.get('title', os.path.basename(self.current_track))
-                artist = metadata.get('artist', 'Unknown Artist')
-                
-                self.track_label.config(text=f"Now playing: {artist} - {display_name}")
-                self.status_var.set(f"Playing: {display_name}")
+                # Display metadata for streaming songs
+                self.display_streaming_metadata(current_item['metadata'])
+                self.artwork_label.configure(image=self.default_artwork)
+                self.artwork_label.image = self.default_artwork
                 
                 # Start progress update thread
                 self.progress_thread = threading.Thread(target=self.update_progress, daemon=True)
@@ -558,16 +851,33 @@ class MP3Player:
         self.play_button.config(text="▶")
         self.progress_var.set(0)
         self.current_time_label.config(text="00:00")
+        self.cleanup_temp_files()
         self.status_var.set("Stopped")
         
     def next_track(self):
         if self.playlist:
+            self.cleanup_temp_files()
             self.current_index = (self.current_index + 1) % len(self.playlist)
+            
+            # Skip separators
+            while (self.current_index < len(self.playlist) and 
+                   isinstance(self.playlist[self.current_index], dict) and 
+                   self.playlist[self.current_index].get('type') == 'separator'):
+                self.current_index = (self.current_index + 1) % len(self.playlist)
+            
             self.play_current_track()
             
     def previous_track(self):
         if self.playlist:
+            self.cleanup_temp_files()
             self.current_index = (self.current_index - 1) % len(self.playlist)
+            
+            # Skip separators
+            while (self.current_index >= 0 and 
+                   isinstance(self.playlist[self.current_index], dict) and 
+                   self.playlist[self.current_index].get('type') == 'separator'):
+                self.current_index = (self.current_index - 1) % len(self.playlist)
+            
             self.play_current_track()
             
     def set_volume(self, value):
@@ -587,6 +897,84 @@ class MP3Player:
         new_volume = max(0, current_volume - 10)
         self.volume_var.set(new_volume)
         self.set_volume(new_volume)
+        
+    def toggle_shuffle(self):
+        """Toggle shuffle mode on/off"""
+        import random
+        
+        if not self.is_shuffled:
+            # Enable shuffle
+            self.is_shuffled = True
+            self.shuffle_button.config(bg='#ff6b35', text='🔀')  # Orange background when active
+            
+            # Save original playlist order
+            self.original_playlist = self.playlist.copy()
+            
+            # Create shuffled playlist while preserving separators
+            songs_only = [item for item in self.playlist if isinstance(item, dict) and item.get('type') == 'streaming']
+            separators = [item for item in self.playlist if isinstance(item, dict) and item.get('type') == 'separator']
+            
+            # Shuffle only the songs
+            random.shuffle(songs_only)
+            
+            # Create new shuffled playlist with songs only (no separators in shuffle mode)
+            self.playlist = songs_only
+            
+            # Update the listbox display
+            self.refresh_playlist_display()
+            
+            # Adjust current index if needed
+            if self.current_track:
+                try:
+                    # Find the current track in the new shuffled playlist
+                    for i, item in enumerate(self.playlist):
+                        if (isinstance(item, dict) and item.get('type') == 'streaming' and 
+                            hasattr(self, 'current_track') and 
+                            item.get('url') == getattr(self.current_item, 'get', lambda x: None)('url')):
+                            self.current_index = i
+                            break
+                except:
+                    self.current_index = 0
+            
+            self.status_var.set("🔀 Shuffle enabled - Playing songs in random order")
+            
+        else:
+            # Disable shuffle
+            self.is_shuffled = False
+            self.shuffle_button.config(bg='#4a4a4a', text='🔀')  # Return to normal background
+            
+            # Restore original playlist order
+            if self.original_playlist:
+                self.playlist = self.original_playlist.copy()
+                self.refresh_playlist_display()
+                
+                # Try to find current track in original playlist
+                if self.current_track:
+                    try:
+                        for i, item in enumerate(self.playlist):
+                            if (isinstance(item, dict) and item.get('type') == 'streaming' and 
+                                hasattr(self, 'current_item') and 
+                                item.get('url') == getattr(self.current_item, 'get', lambda x: None)('url')):
+                                self.current_index = i
+                                break
+                    except:
+                        self.current_index = 0
+            
+            self.status_var.set("📋 Shuffle disabled - Playing songs in original order")
+            
+    def refresh_playlist_display(self):
+        """Refresh the playlist display in the listbox"""
+        self.playlist_listbox.delete(0, tk.END)
+        
+        for item in self.playlist:
+            if isinstance(item, dict):
+                if item.get('type') == 'separator':
+                    self.playlist_listbox.insert(tk.END, item['text'])
+                elif item.get('type') == 'streaming':
+                    self.playlist_listbox.insert(tk.END, item['display_name'])
+            else:
+                # Handle any non-dict items (shouldn't happen in streaming mode)
+                self.playlist_listbox.insert(tk.END, str(item))
         
     def seek(self, event):
         if self.current_track and self.is_playing:
@@ -630,7 +1018,17 @@ class MP3Player:
             except:
                 break
                 
+    def cleanup_temp_files(self):
+        """Clean up temporary streaming files"""
+        try:
+            if hasattr(self, 'current_track') and self.current_track:
+                if os.path.exists(self.current_track) and 'tmp' in self.current_track:
+                    os.unlink(self.current_track)
+        except:
+            pass
+    
     def on_closing(self):
+        self.cleanup_temp_files()
         self.save_settings()
         pygame.mixer.quit()
         self.root.destroy()
